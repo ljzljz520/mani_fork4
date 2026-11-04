@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"sync"
 
 	"github.com/alajmo/mani/core"
 	"github.com/alajmo/mani/core/dao"
@@ -13,22 +14,60 @@ func RunTui(config *dao.Config, themeName string, reload bool) {
 	app := NewApp(config, themeName)
 
 	if reload {
-		WatchFiles(app, append([]string{config.Path}, config.ConfigPaths...)...)
+		app.watcher = WatchFiles(app, append([]string{config.Path}, config.ConfigPaths...)...)
 	}
 
-	if err := app.Run(); err != nil {
+	runErr := app.Run()
+
+	if app.watcher != nil {
+		app.watcher.Stop()
+	}
+
+	if runErr != nil {
 		os.Exit(1)
 	}
 }
 
 type App struct {
-	App *tview.Application
+	App     *tview.Application
+	watcher *configWatcher
+
+	// Reload coordination. At most one reload is parsed at a time; if another
+	// change arrives while one is in flight (or while its result is being
+	// applied) exactly one more parse is scheduled. This coalesces bursts of
+	// file events (atomic saves, rapid edits) while guaranteeing that results
+	// are consumed in order on the UI goroutine, so stale versions can never
+	// replace newer ones.
+	reloadMu      sync.Mutex
+	reloading     bool
+	reloadPending bool
+
+	// readConfig fully parses the main config and its import closure off the
+	// UI goroutine. Inputs are snapshotted from the current valid config so
+	// concurrent swaps cannot mix versions.
+	readConfig func() (dao.Config, error)
+
+	// enqueue runs f on the tview event queue. It is a seam for testing.
+	enqueue func(f func())
 }
 
 func NewApp(config *dao.Config, themeName string) *App {
-	app := &App{
-		App: tview.NewApplication(),
+	tviewApp := tview.NewApplication()
+	app := &App{App: tviewApp}
+
+	app.readConfig = func() (dao.Config, error) {
+		current := misc.Config
+		userConfigPath := ""
+		// Preserve the user config resolution from the initial invocation.
+		if current.UserConfigFile != nil {
+			userConfigPath = *current.UserConfigFile
+		}
+		return dao.ReadConfig(current.Path, userConfigPath, current.Color)
 	}
+	app.enqueue = func(f func()) {
+		app.App.QueueUpdateDraw(f)
+	}
+
 	app.setupApp(config, themeName)
 
 	return app
@@ -38,20 +77,10 @@ func (app *App) Run() error {
 	return app.App.SetRoot(misc.Pages, true).EnableMouse(true).Run()
 }
 
-func (app *App) Reload() {
-	config, configErr := dao.ReadConfig(misc.Config.Path, "", true)
-	if configErr != nil {
-		app.App.Stop()
-	}
-
-	app.setupApp(&config, *misc.ThemeName)
-	app.App.SetRoot(misc.Pages, true)
-	app.App.Draw()
-}
-
 func (app *App) setupApp(config *dao.Config, themeName string) {
 	misc.Config = config
 	misc.ThemeName = &themeName
+
 	theme, err := misc.Config.GetTheme(themeName)
 	core.CheckIfError(err)
 
@@ -71,7 +100,9 @@ func (app *App) setupApp(config *dao.Config, themeName string) {
 
 	// Create pages
 	misc.App = app.App
-	misc.Pages = createPages(projects, projectTags, projectPaths, tasks)
+	newPages, ctrls := createPages(projects, projectTags, projectPaths, tasks)
+	activePages = ctrls
+	misc.Pages = newPages
 
 	// Global input handling
 	HandleInput(app)

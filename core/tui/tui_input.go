@@ -35,7 +35,7 @@ func HandleInput(app *App) {
 			misc.App.SetFocus(*misc.TasksLastFocus)
 			return nil
 		case tcell.KeyF5:
-			go app.Reload()
+			app.requestReload()
 			return nil
 		case tcell.KeyF6:
 			misc.App.Sync()

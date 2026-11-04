@@ -11,9 +11,18 @@ import (
 
 type TTaskPage struct {
 	focusable []*misc.TItem
+
+	taskData *views.TTask
+	pages    *tview.Pages
 }
 
-func CreateTasksPage(tasks []dao.Task) *tview.Flex {
+// TaskPageState is the reload-persistable state of the tasks page.
+type TaskPageState struct {
+	Task  views.TaskViewState
+	Focus int
+}
+
+func CreateTasksPage(tasks []dao.Task) (*tview.Flex, *TTaskPage) {
 	t := &TTaskPage{}
 
 	// Data
@@ -30,7 +39,9 @@ func CreateTasksPage(tasks []dao.Task) *tview.Flex {
 	taskInfo := views.CreateTaskInfoView()
 
 	// Pages
-	taskTablePage := t.createTaskPage(taskData)
+	taskTablePage, taskPages := t.createTaskPage(taskData)
+	t.taskData = taskData
+	t.pages = taskPages
 
 	taskData.Page = tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -71,10 +82,57 @@ func CreateTasksPage(tasks []dao.Task) *tview.Flex {
 		return event
 	})
 
-	return taskData.Page
+	return taskData.Page, t
 }
 
-func (taskPage *TTaskPage) createTaskPage(taskData *views.TTask) *tview.Flex {
+// CaptureState snapshots the tasks page state before a config reload.
+func (t *TTaskPage) CaptureState() TaskPageState {
+	return TaskPageState{
+		Task:  t.taskData.CaptureState(),
+		Focus: t.focusIndex(),
+	}
+}
+
+// RestoreState re-applies captured task data (without touching focus).
+func (t *TTaskPage) RestoreState(state TaskPageState) {
+	t.taskData.RestoreState(state.Task)
+	t.pages.SwitchToPage(t.taskData.TaskStyle)
+	t.focusable = t.updateTaskFocusable(t.taskData)
+}
+
+// RestoreFocus moves focus to the captured pane (clamped to existing panes).
+func (t *TTaskPage) RestoreFocus(state TaskPageState) {
+	if len(t.focusable) == 0 {
+		return
+	}
+
+	idx := state.Focus
+	if idx < 0 || idx >= len(t.focusable) {
+		idx = 0
+	}
+
+	misc.App.SetFocus(t.focusable[idx].Primitive)
+	misc.TasksLastFocus = &t.focusable[idx].Primitive
+}
+
+func (t *TTaskPage) TaskData() *views.TTask { return t.taskData }
+
+func (t *TTaskPage) focusIndex() int {
+	if misc.App == nil {
+		return 0
+	}
+
+	current := misc.App.GetFocus()
+	for i, item := range t.focusable {
+		if item.Primitive == current {
+			return i
+		}
+	}
+
+	return 0
+}
+
+func (taskPage *TTaskPage) createTaskPage(taskData *views.TTask) (*tview.Flex, *tview.Pages) {
 	isTable := taskData.TaskStyle == "task-table"
 
 	pages := tview.NewPages().
@@ -106,7 +164,7 @@ func (taskPage *TTaskPage) createTaskPage(taskData *views.TTask) *tview.Flex {
 		return event
 	})
 
-	return page
+	return page, pages
 }
 
 func (taskPage *TTaskPage) updateTaskFocusable(

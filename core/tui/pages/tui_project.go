@@ -11,13 +11,22 @@ import (
 
 type TProjectPage struct {
 	focusable []*misc.TItem
+
+	projectData *views.TProject
+	pages       *tview.Pages
+}
+
+// ProjectPageState is the reload-persistable state of the projects page.
+type ProjectPageState struct {
+	Project views.ProjectViewState
+	Focus   int
 }
 
 func CreateProjectsPage(
 	projects []dao.Project,
 	projectTags []string,
 	projectPaths []string,
-) *tview.Flex {
+) (*tview.Flex, *TProjectPage) {
 	p := &TProjectPage{}
 
 	// Data
@@ -36,7 +45,9 @@ func CreateProjectsPage(
 
 	// Views
 	projectInfo := views.CreateProjectInfoView()
-	projectTablePage := p.createProjectPage(projectData)
+	projectTablePage, projectPages := p.createProjectPage(projectData)
+	p.projectData = projectData
+	p.pages = projectPages
 
 	// Context page (always show both panes, even when empty)
 	projectData.ContextView = tview.NewFlex().SetDirection(tview.FlexRow)
@@ -90,10 +101,57 @@ func CreateProjectsPage(
 		return event
 	})
 
-	return projectData.Page
+	return projectData.Page, p
 }
 
-func (p *TProjectPage) createProjectPage(projectData *views.TProject) *tview.Flex {
+// CaptureState snapshots the projects page state before a config reload.
+func (p *TProjectPage) CaptureState() ProjectPageState {
+	return ProjectPageState{
+		Project: p.projectData.CaptureState(),
+		Focus:   p.focusIndex(),
+	}
+}
+
+// RestoreState re-applies captured project data (without touching focus).
+func (p *TProjectPage) RestoreState(state ProjectPageState) {
+	p.projectData.RestoreState(state.Project)
+	p.pages.SwitchToPage(p.projectData.ProjectStyle)
+	p.focusable = p.updateProjectFocusable(p.projectData)
+}
+
+// RestoreFocus moves focus to the captured pane (clamped to existing panes).
+func (p *TProjectPage) RestoreFocus(state ProjectPageState) {
+	if len(p.focusable) == 0 {
+		return
+	}
+
+	idx := state.Focus
+	if idx < 0 || idx >= len(p.focusable) {
+		idx = 0
+	}
+
+	misc.App.SetFocus(p.focusable[idx].Primitive)
+	misc.ProjectsLastFocus = &p.focusable[idx].Primitive
+}
+
+func (p *TProjectPage) ProjectData() *views.TProject { return p.projectData }
+
+func (p *TProjectPage) focusIndex() int {
+	if misc.App == nil {
+		return 0
+	}
+
+	current := misc.App.GetFocus()
+	for i, item := range p.focusable {
+		if item.Primitive == current {
+			return i
+		}
+	}
+
+	return 0
+}
+
+func (p *TProjectPage) createProjectPage(projectData *views.TProject) (*tview.Flex, *tview.Pages) {
 	isTable := projectData.ProjectStyle == "project-table"
 
 	pages := tview.NewPages().
@@ -126,7 +184,7 @@ func (p *TProjectPage) createProjectPage(projectData *views.TProject) *tview.Fle
 		return event
 	})
 
-	return page
+	return page, pages
 }
 
 func (p *TProjectPage) updateProjectFocusable(

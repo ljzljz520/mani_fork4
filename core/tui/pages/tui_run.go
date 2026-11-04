@@ -14,6 +14,24 @@ import (
 
 type TRunPage struct {
 	focusable []*misc.TItem
+
+	taskData     *views.TTask
+	projectData  *views.TProject
+	pages        *tview.Pages
+	taskPages    *tview.Pages
+	projectPages *tview.Pages
+	streamView   *tview.TextView
+}
+
+// RunPageState is the reload-persistable state of the run page, including the
+// select/output sub-page, all selections and filters and the focused pane.
+type RunPageState struct {
+	Task    views.TaskViewState
+	Project views.ProjectViewState
+
+	// SubPage is "exec-projects" (selection view) or "exec-run" (output view).
+	SubPage string
+	Focus   int
 }
 
 func CreateRunPage(
@@ -21,7 +39,7 @@ func CreateRunPage(
 	projects []dao.Project,
 	projectTags []string,
 	projectPaths []string,
-) *tview.Flex {
+) (*tview.Flex, *TRunPage) {
 	r := &TRunPage{}
 
 	// Data
@@ -53,11 +71,18 @@ func CreateRunPage(
 	spec := views.CreateSpecView()
 
 	// Pages
-	runPage := r.createSelectPage(taskData, projectData, runInfoView)
+	runPage, taskPages, projectPages := r.createSelectPage(taskData, projectData, runInfoView)
 	outputPage := r.createOutputPage(execInfoView, streamView)
 	pages := tview.NewPages().
 		AddPage("exec-projects", runPage, true, true).
 		AddPage("exec-run", outputPage, true, false)
+
+	r.taskData = taskData
+	r.projectData = projectData
+	r.pages = pages
+	r.taskPages = taskPages
+	r.projectPages = projectPages
+	r.streamView = streamView
 
 	// Main page
 	page := tview.NewFlex().
@@ -127,14 +152,77 @@ func CreateRunPage(
 		return event
 	})
 
-	return page
+	return page, r
+}
+
+// CaptureState snapshots the run page state before a config reload.
+func (r *TRunPage) CaptureState() RunPageState {
+	subPage, _ := r.pages.GetFrontPage()
+
+	return RunPageState{
+		Task:    r.taskData.CaptureState(),
+		Project: r.projectData.CaptureState(),
+		SubPage: subPage,
+		Focus:   r.focusIndex(),
+	}
+}
+
+// RestoreState re-applies captured data, table/tree styles and the
+// select/output sub-page (without touching focus).
+func (r *TRunPage) RestoreState(state RunPageState) {
+	r.taskData.RestoreState(state.Task)
+	r.taskPages.SwitchToPage(r.taskData.TaskStyle)
+
+	r.projectData.RestoreState(state.Project)
+	r.projectPages.SwitchToPage(r.projectData.ProjectStyle)
+
+	if state.SubPage == "exec-run" {
+		r.pages.SwitchToPage("exec-run")
+		r.focusable = r.updateStreamFocusable(r.streamView)
+	} else {
+		r.pages.SwitchToPage("exec-projects")
+		r.focusable = r.updateRunFocusable(*r.taskData, *r.projectData)
+	}
+}
+
+// RestoreFocus moves focus to the captured pane (clamped to existing panes).
+func (r *TRunPage) RestoreFocus(state RunPageState) {
+	if len(r.focusable) == 0 {
+		return
+	}
+
+	idx := state.Focus
+	if idx < 0 || idx >= len(r.focusable) {
+		idx = 0
+	}
+
+	misc.App.SetFocus(r.focusable[idx].Primitive)
+	misc.RunLastFocus = &r.focusable[idx].Primitive
+}
+
+func (r *TRunPage) TaskData() *views.TTask       { return r.taskData }
+func (r *TRunPage) ProjectData() *views.TProject { return r.projectData }
+
+func (r *TRunPage) focusIndex() int {
+	if misc.App == nil {
+		return 0
+	}
+
+	current := misc.App.GetFocus()
+	for i, item := range r.focusable {
+		if item.Primitive == current {
+			return i
+		}
+	}
+
+	return 0
 }
 
 func (r *TRunPage) createSelectPage(
 	taskData *views.TTask,
 	projectData *views.TProject,
 	info *tview.TextView,
-) *tview.Flex {
+) (*tview.Flex, *tview.Pages, *tview.Pages) {
 	// Tasks
 	isTaskTable := taskData.TaskStyle == "task-table"
 	taskPages := tview.NewPages().
@@ -203,10 +291,12 @@ func (r *TRunPage) createSelectPage(
 		AddItem(taskPages, 0, 1, true).
 		AddItem(taskProjects, 0, 1, false)
 
-	return tview.NewFlex().
+	selectPage := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(page, 0, 1, true).
 		AddItem(info, 1, 0, false)
+
+	return selectPage, taskPages, projectPages
 }
 
 func (r *TRunPage) createOutputPage(
@@ -389,7 +479,8 @@ func (r *TRunPage) runTasks(
 		misc.App.Stop()
 	}
 
-	// Run task
+	// Run task. The config is passed by value, so a run started before a
+	// reload keeps operating on the snapshot it was launched with.
 	target := exec.Exec{Projects: projects, Tasks: tasks, Config: *misc.Config}
 
 	if spec.ClearBeforeRun {

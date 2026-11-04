@@ -9,21 +9,37 @@ import (
 	"github.com/rivo/tview"
 )
 
+// pageControllers holds the stateful controllers of every top-level page.
+// It is used to capture and restore UI state across atomic config reloads.
+type pageControllers struct {
+	run      *pages.TRunPage
+	exec     *pages.TExecPage
+	projects *pages.TProjectPage
+	tasks    *pages.TTaskPage
+}
+
 func createPages(
 	projects []dao.Project,
 	projectTags []string,
 	projectPaths []string,
 	tasks []dao.Task,
-) *tview.Pages {
+) (*tview.Pages, *pageControllers) {
 	appPages := tview.NewPages()
 	navPane := createNav()
 	search := components.CreateSearch()
 	misc.Search = search
 
-	projectsPage := pages.CreateProjectsPage(projects, projectTags, projectPaths)
-	tasksPage := pages.CreateTasksPage(tasks)
-	runPage := pages.CreateRunPage(tasks, projects, projectTags, projectPaths)
-	execPage := pages.CreateExecPage(projects, projectTags, projectPaths)
+	projectsPage, projectsCtrl := pages.CreateProjectsPage(projects, projectTags, projectPaths)
+	tasksPage, tasksCtrl := pages.CreateTasksPage(tasks)
+	runPage, runCtrl := pages.CreateRunPage(tasks, projects, projectTags, projectPaths)
+	execPage, execCtrl := pages.CreateExecPage(projects, projectTags, projectPaths)
+
+	ctrls := &pageControllers{
+		run:      runCtrl,
+		exec:     execCtrl,
+		projects: projectsCtrl,
+		tasks:    tasksCtrl,
+	}
 
 	misc.MainPage = tview.NewPages().
 		AddPage("run", runPage, true, true).
@@ -39,7 +55,7 @@ func createPages(
 
 	SwitchToPage("run")
 
-	return appPages
+	return appPages, ctrls
 }
 
 func createNav() *tview.Flex {

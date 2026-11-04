@@ -442,6 +442,90 @@ func (p *TProject) unselectAllPaths() {
 	p.PathView.Update(p.ProjectPathsFiltered)
 }
 
+// ProjectViewState is the reload-persistable state of a project view, keyed
+// by stable identities: project names, tags and paths. It is captured before
+// a config reload and re-applied to the freshly built view, keeping only
+// selections that still exist.
+type ProjectViewState struct {
+	ProjectStyle string
+	Filter       string
+	TagFilter    string
+	PathFilter   string
+
+	Selected      map[string]bool
+	TagsSelected  map[string]bool
+	PathsSelected map[string]bool
+}
+
+// CaptureState snapshots the table/tree style, filter texts and selected
+// projects, tags and paths (only positive selections are stored).
+func (p *TProject) CaptureState() ProjectViewState {
+	selected := make(map[string]bool)
+	for name, on := range p.ProjectsSelected {
+		if on {
+			selected[name] = true
+		}
+	}
+
+	tagsSelected := make(map[string]bool)
+	for name, on := range p.ProjectTagsSelected {
+		if on {
+			tagsSelected[name] = true
+		}
+	}
+
+	pathsSelected := make(map[string]bool)
+	for name, on := range p.ProjectPathsSelected {
+		if on {
+			pathsSelected[name] = true
+		}
+	}
+
+	return ProjectViewState{
+		ProjectStyle:  p.ProjectStyle,
+		Filter:        *p.projectFilterValue,
+		TagFilter:     *p.projectTagFilterValue,
+		PathFilter:    *p.projectPathFilterValue,
+		Selected:      selected,
+		TagsSelected:  tagsSelected,
+		PathsSelected: pathsSelected,
+	}
+}
+
+// RestoreState re-applies captured state to a rebuilt view. Selections whose
+// project, tag or path disappeared from the new config are dropped; new
+// entries default to unselected.
+func (p *TProject) RestoreState(state ProjectViewState) {
+	if state.ProjectStyle == "project-table" || state.ProjectStyle == "project-tree" {
+		p.ProjectStyle = state.ProjectStyle
+	}
+
+	*p.projectFilterValue = state.Filter
+	*p.projectTagFilterValue = state.TagFilter
+	*p.projectPathFilterValue = state.PathFilter
+
+	for name := range p.ProjectsSelected {
+		p.ProjectsSelected[name] = state.Selected[name]
+	}
+	for name := range p.ProjectTagsSelected {
+		p.ProjectTagsSelected[name] = state.TagsSelected[name]
+	}
+	for name := range p.ProjectPathsSelected {
+		p.ProjectPathsSelected[name] = state.PathsSelected[name]
+	}
+
+	components.InitFilter(p.ProjectTableView.Filter, state.Filter)
+	components.InitFilter(p.ProjectTreeView.Filter, state.Filter)
+	components.InitFilter(p.TagView.Filter, state.TagFilter)
+	components.InitFilter(p.PathView.Filter, state.PathFilter)
+
+	p.filterTags()
+	p.filterPaths()
+	p.filterProjects()
+	p.ProjectTableView.UpdateRowStyle()
+	p.ProjectTreeView.UpdateProjectsStyle()
+}
+
 func (p *TProject) showProjectDescModal(name string) {
 	project, err := misc.Config.GetProject(name)
 	if err != nil {

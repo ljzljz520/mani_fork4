@@ -269,6 +269,54 @@ func (t *TTask) unselectAllTasks() {
 	t.TaskTreeView.UpdateTasksStyle()
 }
 
+// TaskViewState is the reload-persistable state of a task view, keyed by the
+// stable task name. It is captured before a config reload and re-applied to
+// the freshly built view, keeping only selections whose task still exists.
+type TaskViewState struct {
+	TaskStyle string
+	Filter    string
+	Selected  map[string]bool
+}
+
+// CaptureState snapshots the table/tree style, filter text and selected task
+// names (only positive selections are stored).
+func (t *TTask) CaptureState() TaskViewState {
+	selected := make(map[string]bool)
+	for name, on := range t.TasksSelected {
+		if on {
+			selected[name] = true
+		}
+	}
+
+	return TaskViewState{
+		TaskStyle: t.TaskStyle,
+		Filter:    *t.taskFilterValue,
+		Selected:  selected,
+	}
+}
+
+// RestoreState re-applies captured state to a rebuilt view. Selections whose
+// task disappeared from the new config are dropped; new tasks default to
+// unselected.
+func (t *TTask) RestoreState(state TaskViewState) {
+	if state.TaskStyle == "task-table" || state.TaskStyle == "task-tree" {
+		t.TaskStyle = state.TaskStyle
+	}
+
+	*t.taskFilterValue = state.Filter
+
+	for name := range t.TasksSelected {
+		t.TasksSelected[name] = state.Selected[name]
+	}
+
+	components.InitFilter(t.TaskTableView.Filter, state.Filter)
+	components.InitFilter(t.TaskTreeView.Filter, state.Filter)
+
+	t.filterTasks()
+	t.TaskTableView.UpdateRowStyle()
+	t.TaskTreeView.UpdateTasksStyle()
+}
+
 func (t *TTask) showTaskDescModal(name string) {
 	task, err := misc.Config.GetTask(name)
 	if err != nil {
